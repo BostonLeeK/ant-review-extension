@@ -368,6 +368,13 @@ EXAMPLE BAD MESSAGE:
         .replace(/```\n?/g, "")
         .trim();
 
+      // Remove problematic control characters that break JSON parsing
+      cleanResponse = cleanResponse
+        .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "") // Remove control characters except \t, \n, \r
+        .replace(/\n/g, "\\n") // Escape newlines properly
+        .replace(/\r/g, "\\r") // Escape carriage returns
+        .replace(/\t/g, "\\t"); // Escape tabs
+
       // Try to find JSON object in the response
       const jsonMatch = cleanResponse.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
@@ -380,7 +387,34 @@ EXAMPLE BAD MESSAGE:
         cleanResponsePreview: cleanResponse.substring(0, 200) + "...",
       });
 
-      const parsed = JSON.parse(cleanResponse);
+      let parsed;
+      try {
+        parsed = JSON.parse(cleanResponse);
+      } catch (jsonError) {
+        // Log detailed error info for debugging
+        console.log("[ClaudeService] JSON Parse Error Details:", {
+          error:
+            jsonError instanceof Error ? jsonError.message : String(jsonError),
+          originalResponse: response.substring(0, 1000),
+          cleanedResponse: cleanResponse.substring(0, 1000),
+          responseLength: response.length,
+          cleanedLength: cleanResponse.length,
+        });
+
+        // Try to extract just the JSON part more aggressively
+        const fallbackMatch = response.match(/\{[^{}]*"issues"[^{}]*\}/);
+        if (fallbackMatch) {
+          try {
+            parsed = JSON.parse(fallbackMatch[0]);
+          } catch (fallbackError) {
+            throw new Error(
+              `JSON parsing failed even with fallback: ${jsonError}`
+            );
+          }
+        } else {
+          throw new Error(`JSON parsing failed: ${jsonError}`);
+        }
+      }
 
       // Validate the parsed structure
       if (!parsed || typeof parsed !== "object") {
