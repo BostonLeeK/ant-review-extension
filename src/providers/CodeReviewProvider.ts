@@ -138,6 +138,7 @@ export class CodeReviewProvider
             await this.handleShowApiKeyInfo();
             break;
           case "analyzeLastCommit":
+            console.log("📨 Received analyzeLastCommit message");
             await this.handleAnalyzeLastCommit();
             break;
           default:
@@ -566,14 +567,22 @@ export class CodeReviewProvider
 
   private async handleAnalyzeLastCommit(): Promise<void> {
     this.logger.logServiceCall("CodeReviewProvider", "handleAnalyzeLastCommit");
+    console.log("🔍 Starting last commit analysis...");
 
     this.sendToWebview("analysisStarted", {});
 
     try {
       // Get last commit changes
+      console.log("📦 Getting last commit changes...");
       const commitInfo = await this.gitService.getLastCommitChanges();
+      console.log("📦 Commit info received:", {
+        hash: commitInfo.commitHash.substring(0, 8),
+        fileCount: commitInfo.changes.length,
+        author: commitInfo.author,
+      });
 
       if (commitInfo.changes.length === 0) {
+        console.log("❌ No files changed in last commit");
         this.sendToWebview("analysisError", {
           error: "No files changed in the last commit",
         });
@@ -588,6 +597,7 @@ export class CodeReviewProvider
       });
 
       // Send commit info to webview
+      console.log("📤 Sending commit info to webview...");
       this.sendToWebview("commitInfo", {
         commitHash: commitInfo.commitHash.substring(0, 8),
         commitMessage: commitInfo.commitMessage,
@@ -598,27 +608,79 @@ export class CodeReviewProvider
 
       this.sendToWebview("fileAnalyzed", {});
 
+      // Check if Claude is configured
+      if (!this.claudeService.isInitialized()) {
+        console.log("❌ Claude not initialized");
+        this.sendToWebview("analysisError", {
+          error: "Claude API not configured. Please set your API key first.",
+        });
+        return;
+      }
+
+      console.log(
+        "🤖 Starting Claude analysis for",
+        commitInfo.changes.length,
+        "files..."
+      );
+
       // Analyze files with Claude
       const claudeResults: ReviewResult[] = [];
 
       for (const fileChange of commitInfo.changes) {
         try {
+          console.log("🔍 Analyzing file:", fileChange.path);
           const result = await this.claudeService.analyzeFullFile(fileChange);
           claudeResults.push(result);
+          console.log(
+            "✅ Claude analyzed file:",
+            fileChange.path,
+            "- found",
+            result.issues.length,
+            "issues"
+          );
           this.logger.debug("Claude analyzed commit file", {
             file: fileChange.path,
             issueCount: result.issues.length,
           });
         } catch (error) {
+          console.log("❌ Failed to analyze file:", fileChange.path, error);
           this.logger.warn("Failed to analyze commit file with Claude", {
             file: fileChange.path,
             error: error instanceof Error ? error.message : String(error),
           });
+          // Add error result
+          claudeResults.push({
+            file: fileChange.path,
+            issues: [
+              {
+                type: "error",
+                line: 1,
+                message: `Analysis failed: ${
+                  error instanceof Error ? error.message : String(error)
+                }`,
+                source: "claude",
+              },
+            ],
+            suggestions: [],
+            score: 0,
+            summary: "Analysis failed",
+          });
         }
       }
 
+      console.log(
+        "🔄 Combining results from",
+        claudeResults.length,
+        "files..."
+      );
+
       // Combine all results
       const combinedResult = this.combineResults(claudeResults);
+      console.log("✅ Combined result:", {
+        totalIssues: combinedResult.issues.length,
+        totalSuggestions: combinedResult.suggestions.length,
+        score: combinedResult.score,
+      });
 
       this.sendToWebview("analysisCompleted", {
         results: combinedResult,
@@ -639,7 +701,10 @@ export class CodeReviewProvider
           totalIssues: combinedResult.issues.length,
         }
       );
+
+      console.log("🎉 Last commit analysis completed successfully!");
     } catch (error) {
+      console.log("💥 Error during last commit analysis:", error);
       this.logger.logError("handleAnalyzeLastCommit", error);
       this.sendToWebview("analysisError", {
         error: `Failed to analyze last commit: ${
@@ -1626,9 +1691,11 @@ export class CodeReviewProvider
         }
 
         function analyzeLastCommit() {
+            console.log("🖱️ Last commit button clicked");
             vscode.postMessage({
                 command: 'analyzeLastCommit'
             });
+            console.log("📤 Sent analyzeLastCommit message to backend");
         }
 
         function openFile(filePath, line) {

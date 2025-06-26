@@ -127,34 +127,49 @@ export class ClaudeService {
       throw new Error(error);
     }
 
-    const prompt = this.getFullFileAnalysisPrompt(fileChange);
-    this.logger.debug("Full file analysis prompt built", {
+    const { systemPrompt, userPrompt } = this.getStructuredPrompts(fileChange);
+    this.logger.debug("Structured prompts built", {
       file: fileChange.path,
-      promptLength: prompt.length,
+      systemPromptLength: systemPrompt.length,
+      userPromptLength: userPrompt.length,
     });
 
     try {
-      this.logger.debug("Sending full file analysis request to Claude API", {
-        file: fileChange.path,
-      });
+      this.logger.debug(
+        "Sending full file analysis request to Claude API with prompt caching",
+        {
+          file: fileChange.path,
+        }
+      );
 
       const response = await this.anthropic.messages.create({
         model: this.currentModel,
         max_tokens: 4000,
+        system: [
+          {
+            type: "text",
+            text: systemPrompt,
+            cache_control: { type: "ephemeral" },
+          } as any,
+        ],
         messages: [
           {
             role: "user",
-            content: prompt,
+            content: userPrompt,
           },
         ],
       });
 
-      this.logger.debug("Claude API full file response received", {
+      this.logger.debug("Claude API response received", {
         file: fileChange.path,
         responseLength:
           response.content[0]?.type === "text"
             ? response.content[0].text.length
             : 0,
+        usage: response.usage,
+        cacheCreationTokens:
+          (response.usage as any)?.cache_creation_input_tokens || 0,
+        cacheReadTokens: (response.usage as any)?.cache_read_input_tokens || 0,
       });
 
       const content = response.content[0];
@@ -238,19 +253,22 @@ export class ClaudeService {
     return results;
   }
 
-  private getFullFileAnalysisPrompt(fileChange: FileChange): string {
+  private getStructuredPrompts(fileChange: FileChange): {
+    systemPrompt: string;
+    userPrompt: string;
+  } {
     // Log content preview for debugging
     const contentPreview = (fileChange.content || "").substring(0, 300);
-    this.logger.debug("Building full file analysis prompt", {
+    this.logger.debug("Building structured prompts", {
       file: fileChange.path,
       contentLength: (fileChange.content || "").length,
       contentPreview: contentPreview.replace(/\n/g, "\\n"),
       firstLine: (fileChange.content || "").split("\n")[0],
     });
 
-    return `You are an expert code reviewer analyzing this ${this.getFileType(
+    const systemPrompt = `You are an expert code reviewer analyzing ${this.getFileType(
       fileChange.path
-    )} file. Find real bugs, logic errors, and issues that prevent the code from working correctly.
+    )} files. Find real bugs, logic errors, and issues that prevent the code from working correctly.
 
 FOCUS ON:
 - Variable name mismatches and typos
@@ -263,12 +281,6 @@ IGNORE:
 - Proper error handling with 'throw new Error' in React hooks
 - Standard import paths like '@/lib/axios'
 - Working code that follows framework conventions
-
-File: ${fileChange.path}
-Content with line numbers:
-\`\`\`
-${this.addLineNumbers(fileChange.content || "")}
-\`\`\`
 
 Respond with JSON:
 {
@@ -301,6 +313,19 @@ EXAMPLE GOOD MESSAGE:
 
 EXAMPLE BAD MESSAGE:  
 "Variable name mismatch detected between declaration and usage"`;
+
+    const userPrompt = `File: ${fileChange.path}
+Content with line numbers:
+\`\`\`
+${this.addLineNumbers(fileChange.content || "")}
+\`\`\``;
+
+    return { systemPrompt, userPrompt };
+  }
+
+  private getFullFileAnalysisPrompt(fileChange: FileChange): string {
+    const { systemPrompt, userPrompt } = this.getStructuredPrompts(fileChange);
+    return `${systemPrompt}\n\n${userPrompt}`;
   }
 
   private getFileType(filePath: string): string {
