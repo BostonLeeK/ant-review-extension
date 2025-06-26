@@ -669,21 +669,23 @@ export class CodeReviewProvider
       }
 
       console.log(
-        "🔄 Combining results from",
+        "🔄 Processing results from",
         claudeResults.length,
         "files..."
       );
 
-      // Combine all results
-      const combinedResult = this.combineResults(claudeResults);
-      console.log("✅ Combined result:", {
-        totalIssues: combinedResult.issues.length,
-        totalSuggestions: combinedResult.suggestions.length,
-        score: combinedResult.score,
+      // For last commit analysis, show individual file results instead of combining
+      console.log("✅ Sending individual file results:", {
+        fileCount: claudeResults.length,
+        totalIssues: claudeResults.reduce((sum, r) => sum + r.issues.length, 0),
+        totalSuggestions: claudeResults.reduce(
+          (sum, r) => sum + r.suggestions.length,
+          0
+        ),
       });
 
       this.sendToWebview("analysisCompleted", {
-        results: combinedResult,
+        results: claudeResults,
         commitInfo: {
           commitHash: commitInfo.commitHash.substring(0, 8),
           commitMessage: commitInfo.commitMessage,
@@ -698,7 +700,10 @@ export class CodeReviewProvider
         {
           commitHash: commitInfo.commitHash.substring(0, 8),
           fileCount: commitInfo.changes.length,
-          totalIssues: combinedResult.issues.length,
+          totalIssues: claudeResults.reduce(
+            (sum, r) => sum + r.issues.length,
+            0
+          ),
         }
       );
 
@@ -720,7 +725,7 @@ export class CodeReviewProvider
     });
 
     const combined: ReviewResult = {
-      file: results[0].file,
+      file: results[0]?.file || "Unknown file",
       issues: [],
       suggestions: [],
       score: 0,
@@ -769,16 +774,31 @@ export class CodeReviewProvider
   }
 
   private sendToWebview(command: string, data?: any): void {
-    this.logger.debug("Sending message to webview", { command });
+    this.logger.debug("Sending message to webview", {
+      command,
+      dataKeys: data ? Object.keys(data) : [],
+    });
 
     const message = { command, data };
 
-    if (this.panel) {
-      this.panel.webview.postMessage(message);
-    }
+    try {
+      if (this.panel) {
+        this.panel.webview.postMessage(message);
+        this.logger.debug("Message sent to panel webview");
+      }
 
-    if (this.webviewView) {
-      this.webviewView.webview.postMessage(message);
+      if (this.webviewView) {
+        this.webviewView.webview.postMessage(message);
+        this.logger.debug("Message sent to sidebar webview");
+      }
+
+      if (!this.panel && !this.webviewView) {
+        this.logger.warn("No webview available to send message to", {
+          command,
+        });
+      }
+    } catch (error) {
+      this.logger.logError("Failed to send message to webview", error);
     }
   }
 
@@ -901,6 +921,16 @@ export class CodeReviewProvider
 
         .section-content::-webkit-scrollbar-thumb:active {
             background: var(--vscode-scrollbarSlider-activeBackground);
+        }
+        
+        .error-message {
+            padding: 16px;
+            background: var(--vscode-inputValidation-errorBackground);
+            color: var(--vscode-inputValidation-errorForeground);
+            border: 1px solid var(--vscode-inputValidation-errorBorder);
+            border-radius: 4px;
+            margin: 8px;
+            text-align: center;
         }
         
         .new-review {
@@ -1856,9 +1886,16 @@ export class CodeReviewProvider
         }
 
         function handleAnalysisCompleted(data) {
+            console.log("✅ Analysis completed, received data:", data);
             updateProgressSteps(3);
             showSection('resultsSection');
-            renderResults(data.results);
+            
+            if (data.results && Array.isArray(data.results)) {
+                console.log("📊 Rendering results for", data.results.length, "files");
+                renderResults(data.results);
+            } else {
+                console.log("❌ Invalid results data:", data.results);
+            }
         }
 
         function handleAnalysisError(data) {
@@ -1900,18 +1937,17 @@ export class CodeReviewProvider
                 const fileItem = document.createElement('div');
                 fileItem.className = 'file-item';
                 
-                fileItem.innerHTML = \`
-                    <span class="file-icon">\${getFileIcon(change.path)}</span>
-                    <div class="file-info">
-                        <div class="file-name">\${change.path}</div>
-                        <div class="file-status">\${change.type}</div>
-                    </div>
-                    <div class="file-actions">
-                        <button class="action-btn small" onclick="analyzeFullFile('\${change.path}')" title="Analyze entire file">
-                            🔍 Analyze File
-                        </button>
-                    </div>
-                \`;
+                fileItem.innerHTML = 
+                    '<span class="file-icon">' + getFileIcon(change.path) + '</span>' +
+                    '<div class="file-info">' +
+                        '<div class="file-name">' + change.path + '</div>' +
+                        '<div class="file-status">' + change.type + '</div>' +
+                    '</div>' +
+                    '<div class="file-actions">' +
+                        '<button class="action-btn small" onclick="analyzeFullFile(\\'' + change.path + '\\')" title="Analyze entire file">' +
+                            '🔍 Analyze File' +
+                        '</button>' +
+                    '</div>';
                 
                 fileTree.appendChild(fileItem);
             });
@@ -1927,10 +1963,18 @@ export class CodeReviewProvider
         }
 
         function renderResults(results) {
+            console.log("🎨 Starting to render results:", results);
             const resultsDiv = document.getElementById('results');
             resultsDiv.innerHTML = '';
             
+            if (!results || !Array.isArray(results)) {
+                console.log("❌ Invalid results format");
+                resultsDiv.innerHTML = '<div class="error-message">Invalid results format</div>';
+                return;
+            }
+            
             results.forEach((result, index) => {
+                console.log("🔍 Processing result " + index + ":", result);
                 // Count issues by type
                 const errorCount = result.issues.filter(i => i.type === 'error').length;
                 const warningCount = result.issues.filter(i => i.type === 'warning').length;
@@ -1940,44 +1984,42 @@ export class CodeReviewProvider
                 // Create file section container
                 const fileSection = document.createElement('div');
                 fileSection.className = 'file-section';
-                fileSection.id = \`file-section-\${index}\`;
+                fileSection.id = 'file-section-' + index;
                 
                 // File header with collapsible functionality
                 const fileHeader = document.createElement('div');
                 fileHeader.className = 'file-results-header';
                 fileHeader.onclick = () => toggleFileResults(index);
-                fileHeader.innerHTML = \`
-                    <div class="file-results-info">
-                        <span class="file-icon">\${getFileIcon(result.file)}</span>
-                        <div class="file-info">
-                            <div class="file-name">\${result.file}</div>
-                            <div class="file-status">Score: \${result.score}/10 | \${totalIssues} issues</div>
-                        </div>
-                        <div class="file-results-counts">
-                            \${errorCount > 0 ? \`<span class="count-badge error">\${errorCount}</span>\` : ''}
-                            \${warningCount > 0 ? \`<span class="count-badge warning">\${warningCount}</span>\` : ''}
-                            \${infoCount > 0 ? \`<span class="count-badge info">\${infoCount}</span>\` : ''}
-                        </div>
-                    </div>
-                    <span class="file-results-toggle" id="toggle-\${index}">▶</span>
-                \`;
+                fileHeader.innerHTML = 
+                    '<div class="file-results-info">' +
+                        '<span class="file-icon">' + getFileIcon(result.file) + '</span>' +
+                        '<div class="file-info">' +
+                            '<div class="file-name">' + result.file + '</div>' +
+                            '<div class="file-status">Score: ' + result.score + '/10 | ' + totalIssues + ' issues</div>' +
+                        '</div>' +
+                        '<div class="file-results-counts">' +
+                            (errorCount > 0 ? '<span class="count-badge error">' + errorCount + '</span>' : '') +
+                            (warningCount > 0 ? '<span class="count-badge warning">' + warningCount + '</span>' : '') +
+                            (infoCount > 0 ? '<span class="count-badge info">' + infoCount + '</span>' : '') +
+                        '</div>' +
+                    '</div>' +
+                    '<span class="file-results-toggle" id="toggle-' + index + '">▶</span>';
                 
                 // File content container
                 const fileContent = document.createElement('div');
                 fileContent.className = 'file-results-content collapsible collapsed';
-                fileContent.id = \`content-\${index}\`;
+                fileContent.id = 'content-' + index;
                 
                 // Add issues to content
                 if (result.issues.length > 0) {
                     result.issues.forEach(issue => {
                         const comment = document.createElement('div');
                         comment.className = 'review-comment';
-                        comment.innerHTML = \`
-                            <div class="comment-text" onclick="openFile('\${result.file}', \${issue.line})">
-                                Line \${issue.line}: \${issue.message}
-                            </div>
-                            <span class="comment-tag \${issue.type}">\${issue.source} \${issue.type}</span>
-                        \`;
+                        comment.innerHTML = 
+                            '<div class="comment-text" onclick="openFile(\\'' + result.file + '\\', ' + issue.line + ')">' +
+                                'Line ' + issue.line + ': ' + issue.message +
+                            '</div>' +
+                            '<span class="comment-tag ' + issue.type + '">' + issue.source + ' ' + issue.type + '</span>';
                         fileContent.appendChild(comment);
                         
                         // Add corresponding suggestion if exists (hidden by default)
@@ -1989,34 +2031,31 @@ export class CodeReviewProvider
                             suggestionItem.style.borderLeft = '2px solid var(--vscode-descriptionForeground)';
                             suggestionItem.style.marginTop = '4px';
                             suggestionItem.style.marginBottom = '8px';
-                            suggestionItem.innerHTML = \`
-                                <div class="comment-text">
-                                    💡 \${suggestion.message}
-                                </div>
-                                <span class="comment-tag">suggestion</span>
-                            \`;
+                            suggestionItem.innerHTML = 
+                                '<div class="comment-text">' +
+                                    '💡 ' + suggestion.message +
+                                '</div>' +
+                                '<span class="comment-tag">suggestion</span>';
                             fileContent.appendChild(suggestionItem);
                             
                             // Add show/hide suggestion button
                             const suggestionToggle = document.createElement('div');
                             suggestionToggle.className = 'suggestion-toggle';
-                            suggestionToggle.innerHTML = \`
-                                <span class="suggestion-btn" onclick="toggleSuggestion(this, '\${result.file}', \${issue.line})">
-                                    💡 Show suggestion
-                                </span>
-                            \`;
+                            suggestionToggle.innerHTML = 
+                                '<span class="suggestion-btn" onclick="toggleSuggestion(this, \\'' + result.file + '\\', ' + issue.line + ')">' +
+                                    '💡 Show suggestion' +
+                                '</span>';
                             comment.appendChild(suggestionToggle);
                         }
                     });
                 } else {
                     const noIssues = document.createElement('div');
                     noIssues.className = 'review-comment';
-                    noIssues.innerHTML = \`
-                        <div class="comment-text">
-                            No issues found in this file.
-                        </div>
-                        <span class="comment-tag">✓ Clean</span>
-                    \`;
+                    noIssues.innerHTML = 
+                        '<div class="comment-text">' +
+                            'No issues found in this file.' +
+                        '</div>' +
+                        '<span class="comment-tag">✓ Clean</span>';
                     fileContent.appendChild(noIssues);
                 }
                 
@@ -2028,31 +2067,29 @@ export class CodeReviewProvider
                 if (remainingSuggestions.length > 0) {
                     const suggestionsHeader = document.createElement('div');
                     suggestionsHeader.className = 'review-comment suggestions-header';
-                    suggestionsHeader.innerHTML = \`
-                        <div class="comment-text">
-                            <strong>General Suggestions (\${remainingSuggestions.length})</strong>
-                            <span class="suggestion-btn" onclick="toggleGeneralSuggestions(this, \${index})">
-                                💡 Show suggestions
-                            </span>
-                        </div>
-                    \`;
+                    suggestionsHeader.innerHTML = 
+                        '<div class="comment-text">' +
+                            '<strong>General Suggestions (' + remainingSuggestions.length + ')</strong>' +
+                            '<span class="suggestion-btn" onclick="toggleGeneralSuggestions(this, ' + index + ')">' +
+                                '💡 Show suggestions' +
+                            '</span>' +
+                        '</div>';
                     fileContent.appendChild(suggestionsHeader);
                     
                     const suggestionsContainer = document.createElement('div');
                     suggestionsContainer.className = 'suggestions-container hidden';
-                    suggestionsContainer.id = \`general-suggestions-\${index}\`;
+                    suggestionsContainer.id = 'general-suggestions-' + index;
                     
                     remainingSuggestions.forEach(suggestion => {
                         const suggestionItem = document.createElement('div');
                         suggestionItem.className = 'review-comment';
                         suggestionItem.style.marginLeft = '16px';
                         suggestionItem.style.borderLeft = '2px solid var(--vscode-descriptionForeground)';
-                        suggestionItem.innerHTML = \`
-                            <div class="comment-text">
-                                💡 \${suggestion.message}
-                            </div>
-                            <span class="comment-tag">suggestion</span>
-                        \`;
+                        suggestionItem.innerHTML = 
+                            '<div class="comment-text">' +
+                                '💡 ' + suggestion.message +
+                            '</div>' +
+                            '<span class="comment-tag">suggestion</span>';
                         suggestionsContainer.appendChild(suggestionItem);
                     });
                     
@@ -2067,8 +2104,8 @@ export class CodeReviewProvider
         }
 
         function toggleFileResults(index) {
-            const content = document.getElementById(\`content-\${index}\`);
-            const toggle = document.getElementById(\`toggle-\${index}\`);
+            const content = document.getElementById('content-' + index);
+            const toggle = document.getElementById('toggle-' + index);
             
             if (!content || !toggle) {
                 return;
@@ -2141,7 +2178,7 @@ export class CodeReviewProvider
         }
 
         function toggleGeneralSuggestions(button, fileIndex) {
-            const suggestionsContainer = document.getElementById(\`general-suggestions-\${fileIndex}\`);
+            const suggestionsContainer = document.getElementById('general-suggestions-' + fileIndex);
             
             if (suggestionsContainer) {
                 if (suggestionsContainer.classList.contains('hidden')) {
