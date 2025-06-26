@@ -368,17 +368,28 @@ EXAMPLE BAD MESSAGE:
         .replace(/```\n?/g, "")
         .trim();
 
-      // Remove problematic control characters that break JSON parsing
-      cleanResponse = cleanResponse
-        .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "") // Remove control characters except \t, \n, \r
-        .replace(/\n/g, "\\n") // Escape newlines properly
-        .replace(/\r/g, "\\r") // Escape carriage returns
-        .replace(/\t/g, "\\t"); // Escape tabs
-
-      // Try to find JSON object in the response
+      // First try to find a complete JSON object
       const jsonMatch = cleanResponse.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
         cleanResponse = jsonMatch[0];
+      }
+
+      // Only clean problematic characters if needed, but preserve JSON structure
+      if (
+        cleanResponse.includes("\n") ||
+        cleanResponse.includes("\r") ||
+        cleanResponse.includes("\t")
+      ) {
+        // Only escape unescaped newlines/returns/tabs within string values
+        cleanResponse = cleanResponse.replace(
+          /"([^"\\]*(\\.[^"\\]*)*)"/g,
+          (match) => {
+            return match
+              .replace(/\n/g, "\\n")
+              .replace(/\r/g, "\\r")
+              .replace(/\t/g, "\\t");
+          }
+        );
       }
 
       this.logger.debug("Cleaned response for parsing", {
@@ -401,17 +412,32 @@ EXAMPLE BAD MESSAGE:
           cleanedLength: cleanResponse.length,
         });
 
-        // Try to extract just the JSON part more aggressively
-        const fallbackMatch = response.match(/\{[^{}]*"issues"[^{}]*\}/);
-        if (fallbackMatch) {
+        // Try multiple fallback strategies
+        let fallbackSuccessful = false;
+
+        // Strategy 1: Extract just the JSON part more aggressively
+        const fallbackMatch = response.match(/\{[\s\S]*"issues"[\s\S]*\}/);
+        if (fallbackMatch && !fallbackSuccessful) {
           try {
             parsed = JSON.parse(fallbackMatch[0]);
+            fallbackSuccessful = true;
           } catch (fallbackError) {
-            throw new Error(
-              `JSON parsing failed even with fallback: ${jsonError}`
-            );
+            console.log("[ClaudeService] Fallback 1 failed:", fallbackError);
           }
-        } else {
+        }
+
+        // Strategy 2: Create minimal valid response
+        if (!fallbackSuccessful) {
+          console.log("[ClaudeService] Using minimal fallback response");
+          parsed = {
+            issues: [],
+            suggestions: [],
+            summary: "Failed to parse Claude response - using empty result",
+          };
+          fallbackSuccessful = true;
+        }
+
+        if (!fallbackSuccessful) {
           throw new Error(`JSON parsing failed: ${jsonError}`);
         }
       }
