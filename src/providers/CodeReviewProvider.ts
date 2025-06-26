@@ -137,6 +137,9 @@ export class CodeReviewProvider
           case "showApiKeyInfo":
             await this.handleShowApiKeyInfo();
             break;
+          case "analyzeLastCommit":
+            await this.handleAnalyzeLastCommit();
+            break;
           default:
             this.logger.warn("Unknown webview message command", {
               command: message.command,
@@ -561,6 +564,91 @@ export class CodeReviewProvider
     }
   }
 
+  private async handleAnalyzeLastCommit(): Promise<void> {
+    this.logger.logServiceCall("CodeReviewProvider", "handleAnalyzeLastCommit");
+
+    this.sendToWebview("analysisStarted", {});
+
+    try {
+      // Get last commit changes
+      const commitInfo = await this.gitService.getLastCommitChanges();
+
+      if (commitInfo.changes.length === 0) {
+        this.sendToWebview("analysisError", {
+          error: "No files changed in the last commit",
+        });
+        return;
+      }
+
+      this.logger.debug("Last commit info", {
+        commitHash: commitInfo.commitHash.substring(0, 8),
+        fileCount: commitInfo.changes.length,
+        author: commitInfo.author,
+        message: commitInfo.commitMessage.substring(0, 50),
+      });
+
+      // Send commit info to webview
+      this.sendToWebview("commitInfo", {
+        commitHash: commitInfo.commitHash.substring(0, 8),
+        commitMessage: commitInfo.commitMessage,
+        author: commitInfo.author,
+        date: commitInfo.date,
+        fileCount: commitInfo.changes.length,
+      });
+
+      this.sendToWebview("fileAnalyzed", {});
+
+      // Analyze files with Claude
+      const claudeResults: ReviewResult[] = [];
+
+      for (const fileChange of commitInfo.changes) {
+        try {
+          const result = await this.claudeService.analyzeFullFile(fileChange);
+          claudeResults.push(result);
+          this.logger.debug("Claude analyzed commit file", {
+            file: fileChange.path,
+            issueCount: result.issues.length,
+          });
+        } catch (error) {
+          this.logger.warn("Failed to analyze commit file with Claude", {
+            file: fileChange.path,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+
+      // Combine all results
+      const combinedResult = this.combineResults(claudeResults);
+
+      this.sendToWebview("analysisCompleted", {
+        results: combinedResult,
+        commitInfo: {
+          commitHash: commitInfo.commitHash.substring(0, 8),
+          commitMessage: commitInfo.commitMessage,
+          author: commitInfo.author,
+          date: commitInfo.date,
+        },
+      });
+
+      this.logger.logServiceResponse(
+        "CodeReviewProvider",
+        "handleAnalyzeLastCommit",
+        {
+          commitHash: commitInfo.commitHash.substring(0, 8),
+          fileCount: commitInfo.changes.length,
+          totalIssues: combinedResult.issues.length,
+        }
+      );
+    } catch (error) {
+      this.logger.logError("handleAnalyzeLastCommit", error);
+      this.sendToWebview("analysisError", {
+        error: `Failed to analyze last commit: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      });
+    }
+  }
+
   private combineResults(results: ReviewResult[]): ReviewResult {
     this.logger.debug("Combining analysis results", {
       resultsCount: results.length,
@@ -714,6 +802,40 @@ export class CodeReviewProvider
         
         .section-content {
             background: var(--vscode-editor-background);
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        .section-content.collapsible {
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        .section-content.collapsed {
+            max-height: 0 !important;
+            overflow: hidden;
+        }
+
+        /* Custom scrollbar styles for better VS Code integration */
+        .section-content::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        .section-content::-webkit-scrollbar-track {
+            background: var(--vscode-scrollbarSlider-background);
+        }
+
+        .section-content::-webkit-scrollbar-thumb {
+            background: var(--vscode-scrollbarSlider-background);
+            border-radius: 4px;
+        }
+
+        .section-content::-webkit-scrollbar-thumb:hover {
+            background: var(--vscode-scrollbarSlider-hoverBackground);
+        }
+
+        .section-content::-webkit-scrollbar-thumb:active {
+            background: var(--vscode-scrollbarSlider-activeBackground);
         }
         
         .new-review {
@@ -1030,6 +1152,49 @@ export class CodeReviewProvider
         .secondary-btn:hover {
             background: var(--vscode-button-secondaryHoverBackground);
         }
+
+        .commit-info {
+            padding: 16px;
+            background: var(--vscode-editor-background);
+            border: 1px solid var(--vscode-panel-border);
+            border-radius: 8px;
+            margin: 8px;
+        }
+
+        .commit-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+
+        .commit-hash {
+            font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+            background: var(--vscode-badge-background);
+            color: var(--vscode-badge-foreground);
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 500;
+        }
+
+        .commit-author {
+            color: var(--vscode-descriptionForeground);
+            font-size: 12px;
+        }
+
+        .commit-message {
+            font-size: 14px;
+            font-weight: 500;
+            margin-bottom: 8px;
+            color: var(--vscode-foreground);
+            line-height: 1.4;
+        }
+
+        .commit-stats {
+            color: var(--vscode-descriptionForeground);
+            font-size: 11px;
+        }
         
         .loading {
             text-align: center;
@@ -1299,6 +1464,29 @@ export class CodeReviewProvider
         </div>
     </div>
 
+    <!-- Last Commit Review Section -->
+    <div id="lastCommitSection" class="section">
+        <div class="section-header" onclick="toggleSection('lastCommit')">
+            <span>LAST COMMIT REVIEW</span>
+            <div style="display: flex; gap: 8px; align-items: center;">
+                <button class="action-btn primary" onclick="analyzeLastCommit()">🔍 Review Last Commit</button>
+                <span class="expand-icon" id="lastCommitIcon">▶</span>
+            </div>
+        </div>
+        <div id="lastCommitContent" class="section-content collapsible collapsed">
+            <div id="commitInfo" class="commit-info hidden">
+                <div class="commit-header">
+                    <div class="commit-hash" id="commitHash"></div>
+                    <div class="commit-author" id="commitAuthor"></div>
+                </div>
+                <div class="commit-message" id="commitMessage"></div>
+                <div class="commit-stats">
+                    <span id="commitDate"></span> • <span id="commitFileCount"></span> files changed
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Files to Review Section -->
     <div id="filesToReviewSection" class="section hidden">
         <div class="section-header" onclick="toggleSection('filesToReview')">
@@ -1397,6 +1585,9 @@ export class CodeReviewProvider
                 case 'modelSet':
                     handleModelSet(message.data);
                     break;
+                case 'commitInfo':
+                    handleCommitInfo(message.data);
+                    break;
             }
         });
 
@@ -1434,6 +1625,12 @@ export class CodeReviewProvider
             });
         }
 
+        function analyzeLastCommit() {
+            vscode.postMessage({
+                command: 'analyzeLastCommit'
+            });
+        }
+
         function openFile(filePath, line) {
             vscode.postMessage({
                 command: 'openFile',
@@ -1462,7 +1659,8 @@ export class CodeReviewProvider
             
             if (content.classList.contains('collapsed')) {
                 content.classList.remove('collapsed');
-                content.style.maxHeight = content.scrollHeight + 'px';
+                // Remove max-height limit for expanded content to allow scrolling
+                content.style.maxHeight = '400px';
                 icon.classList.add('expanded');
             } else {
                 content.classList.add('collapsed');
@@ -1560,6 +1758,25 @@ export class CodeReviewProvider
             }
         }
 
+        function handleCommitInfo(data) {
+            // Show commit info
+            document.getElementById('commitHash').textContent = data.commitHash;
+            document.getElementById('commitAuthor').textContent = 'by ' + data.author;
+            document.getElementById('commitMessage').textContent = data.commitMessage;
+            document.getElementById('commitDate').textContent = new Date(data.date).toLocaleDateString();
+            document.getElementById('commitFileCount').textContent = data.fileCount;
+            
+            // Show commit info section
+            document.getElementById('commitInfo').classList.remove('hidden');
+            
+            // Expand last commit section
+            const content = document.getElementById('lastCommitContent');
+            const icon = document.getElementById('lastCommitIcon');
+            content.classList.remove('collapsed');
+            content.style.maxHeight = '400px';
+            icon.classList.add('expanded');
+        }
+
         function handleAnalysisStarted(data) {
             updateProgressSteps(0);
             showSection('reviewsSection');
@@ -1586,11 +1803,11 @@ export class CodeReviewProvider
             showSection('newReviewSection');
             showSection('filesToReviewSection');
             
-            // Auto-expand files section
+            // Auto-expand files section with scroll support
             const content = document.getElementById('filesToReviewContent');
             const icon = document.getElementById('filesToReviewIcon');
             content.classList.remove('collapsed');
-            content.style.maxHeight = 'none';
+            content.style.maxHeight = '400px';
             icon.classList.add('expanded');
         }
 

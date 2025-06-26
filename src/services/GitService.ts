@@ -353,4 +353,102 @@ export class GitService {
       throw error;
     }
   }
+
+  async getLastCommitChanges(): Promise<{
+    commitHash: string;
+    commitMessage: string;
+    author: string;
+    date: string;
+    changes: FileChange[];
+  }> {
+    this.logger.logServiceCall("GitService", "getLastCommitChanges");
+
+    try {
+      // Get last commit info
+      const log = await this.git.log(["-1"]);
+      if (!log.latest) {
+        throw new Error("No commits found in repository");
+      }
+
+      const commit = log.latest;
+      this.logger.debug("Latest commit found", {
+        hash: commit.hash,
+        message: commit.message,
+        author: commit.author_name,
+        date: commit.date,
+      });
+
+      // Get files changed in last commit
+      const diffSummary = await this.git.diffSummary([
+        commit.hash + "^",
+        commit.hash,
+      ]);
+      const changes: FileChange[] = [];
+
+      for (const file of diffSummary.files) {
+        // Get the diff for this specific file
+        const diff = await this.git.diff([
+          commit.hash + "^",
+          commit.hash,
+          "--",
+          file.file,
+        ]);
+
+        // Get current content of the file (if it still exists)
+        let content: string | undefined;
+        try {
+          content = await this.getFileContent(file.file);
+        } catch (error) {
+          this.logger.debug("Could not get current content for file", {
+            file: file.file,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+
+        // Determine change type based on git diff summary
+        let changeType: "added" | "modified" | "deleted";
+        const textFile = file as any; // Type assertion for diff summary files
+        if (textFile.insertions > 0 && textFile.deletions === 0) {
+          changeType = "added";
+        } else if (textFile.insertions === 0 && textFile.deletions > 0) {
+          changeType = "deleted";
+        } else {
+          changeType = "modified";
+        }
+
+        changes.push({
+          path: file.file,
+          type: changeType,
+          diff,
+          content,
+        });
+
+        this.logger.debug("Processed commit file", {
+          file: file.file,
+          type: changeType,
+          insertions: textFile.insertions || 0,
+          deletions: textFile.deletions || 0,
+        });
+      }
+
+      const result = {
+        commitHash: commit.hash,
+        commitMessage: commit.message,
+        author: commit.author_name,
+        date: commit.date,
+        changes,
+      };
+
+      this.logger.logServiceResponse("GitService", "getLastCommitChanges", {
+        commitHash: commit.hash.substring(0, 8),
+        fileCount: changes.length,
+        author: commit.author_name,
+      });
+
+      return result;
+    } catch (error) {
+      this.logger.logError("getLastCommitChanges", error);
+      throw new Error(`Failed to get last commit changes: ${error}`);
+    }
+  }
 }

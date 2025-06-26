@@ -2,7 +2,7 @@
   "name": "ant-review",
   "displayName": "Ant Review Assistant",
   "description": "AI-powered code review tool with Claude integration",
-  "version": "0.0.95",
+  "version": "0.0.98",
   "publisher": "bostonleek",
   "license": "MIT",
   "icon": "icon.png",
