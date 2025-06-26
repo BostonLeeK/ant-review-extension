@@ -575,23 +575,34 @@ export class CodeReviewProvider
       // Get last commit changes
       console.log("📦 Getting last commit changes...");
       const commitInfo = await this.gitService.getLastCommitChanges();
+      // Filter out deleted files - no need to analyze files that were removed
+      const filesToAnalyze = commitInfo.changes.filter(
+        (change) => change.type !== "deleted"
+      );
+
       console.log("📦 Commit info received:", {
         hash: commitInfo.commitHash.substring(0, 8),
-        fileCount: commitInfo.changes.length,
+        totalFiles: commitInfo.changes.length,
+        filesToAnalyze: filesToAnalyze.length,
+        deletedFiles: commitInfo.changes.length - filesToAnalyze.length,
         author: commitInfo.author,
       });
 
-      if (commitInfo.changes.length === 0) {
-        console.log("❌ No files changed in last commit");
+      if (filesToAnalyze.length === 0) {
+        console.log(
+          "❌ No files to analyze in last commit (only deleted files)"
+        );
         this.sendToWebview("analysisError", {
-          error: "No files changed in the last commit",
+          error: "No files to analyze in the last commit (only deleted files)",
         });
         return;
       }
 
       this.logger.debug("Last commit info", {
         commitHash: commitInfo.commitHash.substring(0, 8),
-        fileCount: commitInfo.changes.length,
+        totalFiles: commitInfo.changes.length,
+        filesToAnalyze: filesToAnalyze.length,
+        deletedFiles: commitInfo.changes.length - filesToAnalyze.length,
         author: commitInfo.author,
         message: commitInfo.commitMessage.substring(0, 50),
       });
@@ -603,7 +614,9 @@ export class CodeReviewProvider
         commitMessage: commitInfo.commitMessage,
         author: commitInfo.author,
         date: commitInfo.date,
-        fileCount: commitInfo.changes.length,
+        fileCount: filesToAnalyze.length,
+        totalFiles: commitInfo.changes.length,
+        deletedFiles: commitInfo.changes.length - filesToAnalyze.length,
       });
 
       this.sendToWebview("fileAnalyzed", {});
@@ -619,14 +632,16 @@ export class CodeReviewProvider
 
       console.log(
         "🤖 Starting Claude analysis for",
-        commitInfo.changes.length,
-        "files..."
+        filesToAnalyze.length,
+        "files (excluding",
+        commitInfo.changes.length - filesToAnalyze.length,
+        "deleted files)..."
       );
 
       // Analyze files with Claude
       const claudeResults: ReviewResult[] = [];
 
-      for (const fileChange of commitInfo.changes) {
+      for (const fileChange of filesToAnalyze) {
         try {
           console.log("🔍 Analyzing file:", fileChange.path);
           const result = await this.claudeService.analyzeFullFile(fileChange);
@@ -699,7 +714,9 @@ export class CodeReviewProvider
         "handleAnalyzeLastCommit",
         {
           commitHash: commitInfo.commitHash.substring(0, 8),
-          fileCount: commitInfo.changes.length,
+          totalFiles: commitInfo.changes.length,
+          analyzedFiles: filesToAnalyze.length,
+          deletedFiles: commitInfo.changes.length - filesToAnalyze.length,
           totalIssues: claudeResults.reduce(
             (sum, r) => sum + r.issues.length,
             0
@@ -1576,7 +1593,7 @@ export class CodeReviewProvider
                 </div>
                 <div class="commit-message" id="commitMessage"></div>
                 <div class="commit-stats">
-                    <span id="commitDate"></span> • <span id="commitFileCount"></span> files changed
+                    <span id="commitDate"></span> • <span id="commitFileCount"></span>
                 </div>
             </div>
         </div>
@@ -1861,7 +1878,13 @@ export class CodeReviewProvider
             document.getElementById('commitAuthor').textContent = 'by ' + data.author;
             document.getElementById('commitMessage').textContent = data.commitMessage;
             document.getElementById('commitDate').textContent = new Date(data.date).toLocaleDateString();
-            document.getElementById('commitFileCount').textContent = data.fileCount;
+            
+            // Show file count with breakdown
+            let fileCountText = data.fileCount + ' files analyzed';
+            if (data.deletedFiles && data.deletedFiles > 0) {
+                fileCountText += ' (' + data.totalFiles + ' total, ' + data.deletedFiles + ' deleted)';
+            }
+            document.getElementById('commitFileCount').textContent = fileCountText;
             
             // Show commit info section
             document.getElementById('commitInfo').classList.remove('hidden');
