@@ -1,0 +1,146 @@
+{
+  "name": "ant-review",
+  "displayName": "Ant Review Assistant",
+  "description": "AI-powered code review tool with Claude integration",
+  "version": "0.0.91",
+  "publisher": "bostonleek",
+  "license": "MIT",
+  "icon": "icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/bostonleek/ant-review-extension.git"
+  },
+  "engines": {
+    "vscode": "^1.96.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "code-review.openPanel",
+        "title": "Open Ant Review",
+        "icon": "$(git-pull-request)"
+      },
+      {
+        "command": "code-review.refreshChanges",
+        "title": "Refresh Changes",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "code-review.showLogs",
+        "title": "Show Ant Review Logs",
+        "icon": "$(output)"
+      },
+      {
+        "command": "code-review.clearLogs",
+        "title": "Clear Ant Review Logs",
+        "icon": "$(clear-all)"
+      },
+      {
+        "command": "codeReview.showCurrentLineIssues",
+        "title": "Show Issues on Current Line",
+        "icon": "$(warning)"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "codeReviewSidebar",
+          "title": "Ant Review",
+          "icon": "$(git-pull-request)"
+        }
+      ],
+      "panel": [
+        {
+          "id": "codeReviewPanel",
+          "title": "Ant Review",
+          "icon": "$(git-pull-request)"
+        }
+      ]
+    },
+    "views": {
+      "codeReviewSidebar": [
+        {
+          "type": "webview",
+          "id": "codeReview.sidebarView",
+          "name": "Ant Review",
+          "when": "codeReview.active"
+        }
+      ],
+      "codeReviewPanel": [
+        {
+          "type": "webview",
+          "id": "codeReview.mainView",
+          "name": "Ant Review",
+          "when": "codeReview.panelActive"
+        }
+      ]
+    },
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "code-review.openPanel"
+        },
+        {
+          "command": "codeReview.showCurrentLineIssues"
+        }
+      ],
+      "scm/title": [
+        {
+          "command": "code-review.openPanel",
+          "when": "scmProvider == git",
+          "group": "navigation"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "codeReview.showCurrentLineIssues",
+        "key": "ctrl+shift+i",
+        "mac": "cmd+shift+i",
+        "when": "editorTextFocus"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run package",
+    "package": "webpack --mode production --devtool hidden-source-map",
+    "package-extension": "vsce package",
+    "install-extension": "vsce package --out code-review.vsix && code --install-extension code-review.vsix",
+    "compile-tests": "tsc -p . --outDir out",
+    "watch-tests": "tsc -p . -w --outDir out",
+    "pretest": "npm run compile-tests && npm run compile && npm run lint",
+    "lint": "eslint src",
+    "test": "vscode-test"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.30.1",
+    "@typescript-eslint/parser": "^8.31.1",
+    "eslint": "^8.57.0",
+    "simple-git": "^3.27.0"
+  },
+  "devDependencies": {
+    "@types/eslint": "^9.6.1",
+    "@types/mocha": "^10.0.10",
+    "@types/node": "20.x",
+    "@types/vscode": "^1.96.0",
+    "@typescript-eslint/eslint-plugin": "^8.31.1",
+    "@vscode/test-cli": "^0.0.10",
+    "@vscode/test-electron": "^2.5.2",
+    "@vscode/vsce": "^3.6.0",
+    "eslint-plugin-import": "^2.29.1",
+    "eslint-plugin-jsx-a11y": "^6.8.0",
+    "eslint-plugin-react": "^7.34.0",
+    "eslint-plugin-react-hooks": "^4.6.0",
+    "ts-loader": "^9.5.2",
+    "typescript": "^5.8.3",
+    "webpack": "^5.99.7",
+    "webpack-cli": "^6.0.1"
+  }
+}
