@@ -1,7 +1,22 @@
 import Anthropic from "@anthropic-ai/sdk";
 import * as vscode from "vscode";
-import { ClaudeConfig, FileChange, ReviewResult } from "../types";
+import { ClaudeConfig, ClaudeModel, FileChange, ReviewResult } from "../types";
 import { LoggerService } from "./LoggerService";
+
+export const CLAUDE_MODELS = {
+  OPUS_4: "claude-opus-4-20250514" as ClaudeModel,
+  SONNET_4: "claude-sonnet-4-20250514" as ClaudeModel,
+  SONNET_3_7: "claude-3-7-sonnet-20250219" as ClaudeModel,
+  SONNET_3_5: "claude-3-5-sonnet-20241022" as ClaudeModel,
+  HAIKU_3_5: "claude-3-5-haiku-20241022" as ClaudeModel,
+  HAIKU_3: "claude-3-haiku-20240307" as ClaudeModel,
+} as const;
+
+export const MODEL_DISPLAY_NAMES = {
+  [CLAUDE_MODELS.SONNET_3_5]: "Claude 3.5 Sonnet (Smart & Accurate)",
+  [CLAUDE_MODELS.HAIKU_3_5]: "Claude 3.5 Haiku (Fast & Cheap)",
+  [CLAUDE_MODELS.HAIKU_3]: "Claude 3 Haiku (Legacy Fast)",
+} as const;
 
 export class ClaudeService {
   private anthropic: Anthropic | null = null;
@@ -10,6 +25,7 @@ export class ClaudeService {
   private initializationPromise: Promise<void> | null = null;
   private isInitializing = false;
   private resultCache = new Map<string, ReviewResult>();
+  private currentModel: ClaudeModel = CLAUDE_MODELS.SONNET_4;
 
   constructor(context: vscode.ExtensionContext, logger: LoggerService) {
     this.context = context;
@@ -32,7 +48,13 @@ export class ClaudeService {
         this.anthropic = new Anthropic({
           apiKey: config.apiKey,
         });
-        this.logger.info("ClaudeService initialized with saved config");
+        // Load saved model preference
+        if (config.model) {
+          this.currentModel = config.model;
+        }
+        this.logger.info("ClaudeService initialized with saved config", {
+          model: this.currentModel,
+        });
       } else {
         this.logger.info("No saved config found for ClaudeService");
       }
@@ -63,7 +85,7 @@ export class ClaudeService {
         apiKey: apiKey,
       });
 
-      await this.saveConfig({ apiKey, model: "claude-3-5-sonnet-20241022" });
+      await this.saveConfig({ apiKey, model: this.currentModel });
       this.logger.info("ClaudeService initialized successfully");
     } catch (error) {
       this.logger.logError("ClaudeService initialization", error);
@@ -117,7 +139,7 @@ export class ClaudeService {
       });
 
       const response = await this.anthropic.messages.create({
-        model: "claude-3-5-sonnet-20241022",
+        model: this.currentModel,
         max_tokens: 4000,
         messages: [
           {
@@ -579,7 +601,7 @@ EXAMPLE BAD MESSAGE:
       this.logger.debug("Sending code analysis request to Claude API");
 
       const response = await this.anthropic.messages.create({
-        model: "claude-3-5-sonnet-20241022",
+        model: this.currentModel,
         max_tokens: 2000,
         messages: [
           {
@@ -614,5 +636,22 @@ EXAMPLE BAD MESSAGE:
   clearCache(): void {
     this.resultCache.clear();
     this.logger.debug("Analysis result cache cleared");
+  }
+
+  async setModel(model: ClaudeModel): Promise<void> {
+    this.logger.logOperation("Setting Claude model", { model });
+
+    this.currentModel = model;
+
+    // Update config with new model
+    const config = await this.getConfig();
+    if (config) {
+      await this.saveConfig({ ...config, model });
+      this.logger.info("Claude model updated", { model });
+    }
+  }
+
+  getCurrentModel(): ClaudeModel {
+    return this.currentModel;
   }
 }

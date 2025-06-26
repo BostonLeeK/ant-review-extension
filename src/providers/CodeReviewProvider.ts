@@ -118,6 +118,9 @@ export class CodeReviewProvider
           case "setApiKey":
             await this.handleSetApiKey(message.data.apiKey);
             break;
+          case "setModel":
+            await this.handleSetModel(message.data.model);
+            break;
           case "analyzeFiles":
             await this.handleAnalyzeFiles(message.data.fileChanges);
             break;
@@ -188,6 +191,7 @@ export class CodeReviewProvider
         changes,
         claudeConfigured: hasValidConfig && this.claudeService.isInitialized(),
         maskedApiKey: maskedApiKey,
+        currentModel: this.claudeService.getCurrentModel(),
       });
 
       this.sendToWebview("branchInfo", {
@@ -221,6 +225,38 @@ export class CodeReviewProvider
       this.logger.logError("Set API key", error);
       vscode.window.showErrorMessage(`Failed to configure Claude: ${error}`);
       this.sendToWebview("apiKeySet", {
+        success: false,
+        error: String(error),
+      });
+    }
+  }
+
+  private async handleSetModel(model: string): Promise<void> {
+    this.logger.logOperation("Setting Claude model", { model });
+
+    try {
+      await this.claudeService.setModel(model as any);
+      const modelName = model.includes("sonnet")
+        ? "Claude 3.5 Sonnet"
+        : "Claude 3 Haiku";
+
+      vscode.window.showInformationMessage(
+        `Claude model changed to ${modelName}`
+      );
+
+      // Clear cache when changing models
+      this.claudeService.clearCache();
+
+      this.sendToWebview("modelSet", {
+        success: true,
+        model,
+        modelName,
+      });
+      this.logger.info("Model set successfully", { model });
+    } catch (error) {
+      this.logger.logError("Set model", error);
+      vscode.window.showErrorMessage(`Failed to set Claude model: ${error}`);
+      this.sendToWebview("modelSet", {
         success: false,
         error: String(error),
       });
@@ -921,6 +957,79 @@ export class CodeReviewProvider
             margin-top: 12px;
             font-size: 12px;
         }
+
+        .model-selection {
+            margin-top: 16px;
+            margin-bottom: 8px;
+        }
+
+        .model-selection label {
+            display: block;
+            margin-bottom: 4px;
+            font-size: 12px;
+            color: var(--vscode-descriptionForeground);
+        }
+
+        .model-select {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid var(--vscode-input-border);
+            border-radius: 4px;
+            background: var(--vscode-input-background);
+            color: var(--vscode-input-foreground);
+            font-size: 12px;
+            font-family: inherit;
+        }
+
+        .model-select:focus {
+            outline: 1px solid var(--vscode-focusBorder);
+            border-color: var(--vscode-focusBorder);
+        }
+
+        .settings-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+
+        .close-btn {
+            background: none;
+            border: none;
+            color: var(--vscode-foreground);
+            font-size: 18px;
+            cursor: pointer;
+            padding: 8px;
+            border-radius: 4px;
+            opacity: 0.7;
+            transition: opacity 0.2s;
+        }
+
+        .close-btn:hover {
+            opacity: 1;
+            background: var(--vscode-button-secondaryHoverBackground);
+        }
+
+        .settings-footer {
+            margin-top: 30px;
+            padding-top: 20px;
+            border-top: 1px solid var(--vscode-panel-border);
+        }
+
+        .secondary-btn {
+            background: var(--vscode-button-secondaryBackground);
+            color: var(--vscode-button-secondaryForeground);
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background-color 0.2s;
+        }
+
+        .secondary-btn:hover {
+            background: var(--vscode-button-secondaryHoverBackground);
+        }
         
         .loading {
             text-align: center;
@@ -1153,12 +1262,27 @@ export class CodeReviewProvider
 
     <!-- API Key Configuration -->
     <div id="apiKeySection" class="api-key-section hidden">
-        <div class="api-title">Configure Claude API Key</div>
+        <div class="settings-header">
+            <div class="api-title">Configure Claude API Key</div>
+            <button onclick="closeSettings()" class="close-btn">✕</button>
+        </div>
         <div class="api-subtitle">Enter your Anthropic Claude API key to start analyzing code</div>
         <input type="password" id="apiKeyInput" class="api-input" placeholder="sk-ant-api03-...">
         <br>
         <button onclick="setApiKey()" class="api-btn">Set API Key</button>
+        <div class="model-selection">
+            <label for="modelSelect">Claude Model:</label>
+            <select id="modelSelect" class="model-select" onchange="setModel()">
+                <option value="claude-3-7-sonnet-20250219">Claude 3.7 Sonnet (Extended Thinking)</option>
+                <option value="claude-3-5-sonnet-20241022">Claude 3.5 Sonnet (Smart & Accurate)</option>
+                <option value="claude-3-5-haiku-20241022">Claude 3.5 Haiku (Fast & Cheap)</option>
+                <option value="claude-3-haiku-20240307">Claude 3 Haiku (Legacy Fast)</option>
+            </select>
+        </div>
         <div id="apiKeyStatus" class="api-status"></div>
+        <div class="settings-footer">
+            <button onclick="closeSettings()" class="secondary-btn">Done</button>
+        </div>
     </div>
 
     <!-- New Review Section -->
@@ -1229,6 +1353,16 @@ export class CodeReviewProvider
         const vscode = acquireVsCodeApi();
         let currentChanges = [];
 
+        // Handle ESC key to close settings
+        document.addEventListener('keydown', function(event) {
+            if (event.key === 'Escape') {
+                const apiKeySection = document.getElementById('apiKeySection');
+                if (apiKeySection && !apiKeySection.classList.contains('hidden')) {
+                    closeSettings();
+                }
+            }
+        });
+
         window.addEventListener('message', event => {
             const message = event.data;
             
@@ -1260,6 +1394,9 @@ export class CodeReviewProvider
                 case 'branchInfo':
                     updateBranchInfo(message.data.currentBranch, message.data.baseBranch);
                     break;
+                case 'modelSet':
+                    handleModelSet(message.data);
+                    break;
             }
         });
 
@@ -1271,6 +1408,19 @@ export class CodeReviewProvider
                     data: { apiKey }
                 });
             }
+        }
+
+        function setModel() {
+            const model = document.getElementById('modelSelect').value;
+            vscode.postMessage({
+                command: 'setModel',
+                data: { model }
+            });
+        }
+
+        function closeSettings() {
+            document.getElementById('apiKeySection').classList.add('hidden');
+            showMainInterface();
         }
 
         function refreshChanges() {
@@ -1368,6 +1518,11 @@ export class CodeReviewProvider
             
             document.getElementById('loadingSection').classList.add('hidden');
             
+            // Set current model in dropdown
+            if (data.currentModel) {
+                document.getElementById('modelSelect').value = data.currentModel;
+            }
+            
             if (data.claudeConfigured) {
                 showMainInterface();
                 updateFilesCount(data.changes.length);
@@ -1392,6 +1547,16 @@ export class CodeReviewProvider
             } else {
                 document.getElementById('apiKeyStatus').innerHTML = 
                     '<span style="color: var(--vscode-errorForeground);">✗ Failed to configure API key</span>';
+            }
+        }
+
+        function handleModelSet(data) {
+            if (data.success) {
+                document.getElementById('apiKeyStatus').innerHTML = 
+                    '<span style="color: var(--vscode-testing-iconPassed);">✓ Model updated to ' + data.modelName + '</span>';
+            } else {
+                document.getElementById('apiKeyStatus').innerHTML = 
+                    '<span style="color: var(--vscode-errorForeground);">✗ Failed to update model</span>';
             }
         }
 

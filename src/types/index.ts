@@ -30,9 +30,17 @@ export interface Suggestion {
   source: "claude" | "ant" | "linter" | "diff";
 }
 
+export type ClaudeModel =
+  | "claude-opus-4-20250514"
+  | "claude-sonnet-4-20250514"
+  | "claude-3-7-sonnet-20250219"
+  | "claude-3-5-sonnet-20241022"
+  | "claude-3-5-haiku-20241022"
+  | "claude-3-haiku-20240307";
+
 export interface ClaudeConfig {
   apiKey: string;
-  model: string;
+  model: ClaudeModel;
 }
 
 export interface AnalysisConfig {
